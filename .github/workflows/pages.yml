@@ -1,5 +1,5 @@
 name: Deploy GitHub Pages
-# Redeploy request for v11.4
+# Redeploy request for v12.0 — mobile Glafira chat fix
 
 on:
   push:
