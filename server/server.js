@@ -236,6 +236,15 @@ function mergeValue(base, cur, val) {
 /* ---------------- documents ---------------- */
 const DOC_ID = /^[A-Za-z0-9-]{8,64}$/;
 const DOC_FIELDS = ['title', 'kind', 'party', 'number', 'docDate', 'note', 'fileName', 'createdAt', 'updatedAt', 'deletedAt', 'source', 'sourceId', 'syncedAt'];
+const replacedIds = new Set();
+const DOC_LOG_ACTIONS = ['docs.create', 'docs.replace', 'docs.save', 'docs.trash', 'docs.restore', 'docs.delete', 'trash.purge'];
+async function readAudit(filter, limit) {
+  let lines = [];
+  try { lines = (await fsp.readFile(P.audit(), 'utf8')).trim().split('\n'); } catch { return []; }
+  const out = [];
+  for (let i = lines.length - 1; i >= 0 && out.length < limit; i--) { let a; try { a = JSON.parse(lines[i]); } catch { continue; } if (!filter || filter(a)) out.push(a); }
+  return out;
+}
 const usedBytes = () => docs.reduce((a, d) => a + (d.size || 0), 0);
 const docFile = id => path.join(P.docsDir(), id);
 function cleanMeta(m) {
@@ -304,7 +313,7 @@ const j=await r.json().catch(()=>({}));if(r.ok){location.href='/';return}if(r.st
 function esc(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
 function appPage(user) {
   let html = fs.readFileSync(APP_HTML, 'utf8');
-  const boot = { user: publicUser(user), rev: state.rev, values: Object.fromEntries(SHARED_KEYS.map(k => [k, state.values[k] ?? null])) };
+  const boot = { user: publicUser(user), people: Object.fromEntries(users.map(u => [u.login, u.name])), rev: state.rev, values: Object.fromEntries(SHARED_KEYS.map(k => [k, state.values[k] ?? null])) };
   const inject = `<script>window.__GBUK_BOOT__=${JSON.stringify(boot).replace(/</g, '\\u003c').replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029')}</script><script src="/gbuk-server.js"></script>`;
   const i = html.indexOf('</head>');
   return i < 0 ? inject + html : html.slice(0, i) + inject + html.slice(i);
@@ -403,6 +412,11 @@ async function handle(req, res) {
 
   /* --- documents --- */
   if (p === '/api/docs' && m === 'GET') return json(req, res, 200, docs.map(d => ({ ...d })));
+  if (p === '/api/docs/log' && m === 'GET') {
+    const limit = Math.min(500, Number(url.searchParams.get('limit')) || 100), names = Object.fromEntries(users.map(u => [u.login, u.name]));
+    const list = await readAudit(a => DOC_LOG_ACTIONS.includes(a.action), limit);
+    return json(req, res, 200, list.map(a => ({ at: a.at, user: a.user, name: a.user ? names[a.user] || a.user : 'Система', action: a.action, ...(a.details || {}) })));
+  }
   if (p === '/api/docs/usage' && m === 'GET') return json(req, res, 200, { used: usedBytes(), quota: CFG.quota, count: docs.filter(d => !d.deletedAt).length });
   const dm = /^\/api\/docs\/([^/]+)(\/file)?$/.exec(p);
   if (dm) {
@@ -428,7 +442,7 @@ async function handle(req, res) {
       await fsp.writeFile(tmp, body, { mode: 0o600 });
       await fsp.rename(tmp, docFile(id));
       let name = ''; try { name = decodeURIComponent(String(req.headers['x-file-name'] || '')); } catch {}
-      if (d) { d.size = body.length; if (name) d.fileName = name.slice(0, 250); d.updatedAt = new Date().toISOString(); d.uploadedBy = user.login; }
+      if (d) { d.size = body.length; if (name) d.fileName = name.slice(0, 250); d.updatedAt = new Date().toISOString(); d.uploadedBy = user.login; if (!d.pending) replacedIds.add(id); }
       else docs.push({ id, size: body.length, fileName: name.slice(0, 250) || 'document', createdAt: new Date().toISOString(), uploadedBy: user.login, pending: true });
       await saveDocs();
       audit(req, user, 'docs.file', { id, size: body.length });
@@ -437,18 +451,20 @@ async function handle(req, res) {
     if (!dm[2] && m === 'PUT') {
       const b = await readJsonBody(req, 100_000);
       if (!d) return fail(req, res, 400, 'Сначала загрузите файл');
-      const wasDeleted = !!d.deletedAt;
+      const wasDeleted = !!d.deletedAt, wasPending = !!d.pending, before = JSON.stringify(cleanMeta(d));
       const meta = cleanMeta(b);
       for (const f of DOC_FIELDS) if (f !== 'fileName') { if (f in meta) d[f] = meta[f]; else if (f === 'deletedAt' || f === 'note' || f === 'party' || f === 'number' || f === 'docDate') delete d[f]; }
       if (meta.fileName) d.fileName = meta.fileName;
       if (d.pending) { delete d.pending; d.createdBy = user.login; }
       d.updatedBy = user.login;
       await saveDocs();
-      audit(req, user, d.deletedAt && !wasDeleted ? 'docs.trash' : !d.deletedAt && wasDeleted ? 'docs.restore' : 'docs.save', { id, title: d.title });
+      const action = wasPending ? 'docs.create' : replacedIds.delete(id) ? 'docs.replace' : d.deletedAt && !wasDeleted ? 'docs.trash' : !d.deletedAt && wasDeleted ? 'docs.restore' : 'docs.save';
+      const changed = action !== 'docs.save' || before.replace(/"updatedAt":"[^"]*",?/, '') !== JSON.stringify(cleanMeta(d)).replace(/"updatedAt":"[^"]*",?/, '');
+      if (changed) audit(req, user, action, { id, title: d.title, fileName: d.fileName, size: d.size, kind: d.kind });
       return json(req, res, 200, { ok: true });
     }
     if (!dm[2] && m === 'DELETE') {
-      if (d) { docs = docs.filter(x => x !== d); await saveDocs(); await fsp.rm(docFile(id), { force: true }); audit(req, user, 'docs.delete', { id, title: d.title }); }
+      if (d) { docs = docs.filter(x => x !== d); await saveDocs(); await fsp.rm(docFile(id), { force: true }); audit(req, user, 'docs.delete', { id, title: d.title, fileName: d.fileName, size: d.size, kind: d.kind }); }
       return json(req, res, 200, { ok: true });
     }
   }
@@ -458,9 +474,7 @@ async function handle(req, res) {
     if (user.role !== 'owner') return fail(req, res, 403, 'Недостаточно прав');
     if (p === '/api/audit' && m === 'GET') {
       const limit = Math.min(500, Number(url.searchParams.get('limit')) || 100);
-      let lines = [];
-      try { lines = (await fsp.readFile(P.audit(), 'utf8')).trim().split('\n').slice(-limit).reverse().map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean); } catch {}
-      return json(req, res, 200, lines);
+      return json(req, res, 200, await readAudit(null, limit));
     }
     if (p === '/api/users' && m === 'GET') return json(req, res, 200, users.map(u => ({ ...publicUser(u), disabled: !!u.disabled, lastLoginAt: u.lastLoginAt || null, createdAt: u.createdAt || null, createdBy: u.createdBy || null, manageable: u.role === 'accountant' })));
     if (p === '/api/users' && m === 'POST') {

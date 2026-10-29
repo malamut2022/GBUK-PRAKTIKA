@@ -7,7 +7,7 @@
   const B = window.__GBUK_BOOT__;
   if (!B || !B.user) return;
   const user = B.user;
-  window.__GBUK_SERVER__ = { user };
+  window.__GBUK_SERVER__ = { user, people: B.people || {} };
   const SHARED = ['gbuk_praktika_v9_events', 'gbuk_praktika_contract_registry_v1', 'gbuk_praktika_tax_settings_v1'];
   const SP = Storage.prototype, oGet = SP.getItem, oSet = SP.setItem, oRem = SP.removeItem;
   const isApp = k => typeof k === 'string' && k.startsWith('gbuk_');
@@ -110,7 +110,7 @@
 #access .audit div{font-size:13px;padding:6px 0;border-top:1px solid #f0f2ee;color:#4b5650}@media(max-width:700px){#access .hide-m{display:none}}`;
   const ROLE_ACTIONS = { 'login.ok': 'вход', 'login.fail': 'неудачный вход', 'login.locked': 'вход заблокирован (много попыток)', logout: 'выход', 'password.change': 'сменил(а) пароль', 'password.fail': 'неверный текущий пароль',
     'user.create': 'создан доступ бухгалтера', 'user.reset': 'сброшен пароль', 'user.disable': 'доступ заблокирован', 'user.enable': 'доступ разблокирован', 'user.delete': 'доступ удалён', 'user.reset.cli': 'пароль сброшен администратором',
-    'data.save': 'изменены данные', 'docs.file': 'загружен файл', 'docs.save': 'сохранён документ', 'docs.trash': 'документ в корзине', 'docs.restore': 'документ восстановлен', 'docs.delete': 'документ удалён навсегда', 'docs.quota': 'не хватило места', 'trash.purge': 'очищена корзина', init: 'первичная настройка' };
+    'data.save': 'изменены данные', 'docs.file': 'передан файл', 'docs.create': 'загружен документ', 'docs.replace': 'заменён файл документа', 'docs.save': 'изменён документ', 'docs.trash': 'документ в корзине', 'docs.restore': 'документ восстановлен', 'docs.delete': 'документ удалён навсегда', 'docs.quota': 'не хватило места', 'trash.purge': 'очищена корзина', init: 'первичная настройка' };
   const KEY_NAMES = { gbuk_praktika_v9_events: 'дела и сроки', gbuk_praktika_contract_registry_v1: 'реестр договоров', gbuk_praktika_tax_settings_v1: 'настройки налогов' };
   const h = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const when = v => v ? new Date(v).toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '—';
